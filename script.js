@@ -40,6 +40,11 @@ class FireRenderer {
     this.uniforms = {};
     this.vbo = null;
     this.initialized = false;
+    // WebGL が使えない場合は Canvas 2D でフォールバック
+    this.useCanvas2D = false;
+    this.ctx2d = null;
+    // Canvas 2D フォールバック用パーティクル
+    this.flameParticles = [];
   }
 
   // GLSLシェーダーをインラインで定義（fire.glslの内容をJS文字列として保持）
@@ -125,8 +130,9 @@ class FireRenderer {
         col.r = clamp(t * 2.5, 0.0, 1.0);
         col.g = clamp(t * t * 1.8 - 0.1, 0.0, 1.0);
         col.b = clamp((t - 0.75) * 4.0, 0.0, 1.0);
-        col.r = pow(col.r, 0.8);
-        col.g = pow(col.g, 1.1);
+        // pow() に 0 を渡すと一部の WebGL1 実装で undefined behavior になるため保護
+        col.r = pow(max(col.r, 0.0001), 0.8);
+        col.g = pow(max(col.g, 0.0001), 1.1);
         return col;
       }
 
@@ -207,7 +213,8 @@ class FireRenderer {
         vec3 finalColor = flameColor + smokeColor * smokeAlpha;
         float finalAlpha = clamp(flameAlpha + smokeAlpha, 0.0, 1.0);
 
-        finalColor = pow(finalColor, vec3(0.85));
+        // pow() に 0 を渡すと一部の WebGL1 実装で問題になるため保護
+        finalColor = pow(max(finalColor, vec3(0.0001)), vec3(0.85));
         finalColor *= 1.0 + intensity * 0.2;
 
         gl_FragColor = vec4(finalColor, finalAlpha);
@@ -216,11 +223,16 @@ class FireRenderer {
   }
 
   init() {
-    const gl = this.canvas.getContext('webgl', {
+    // webgl2 → webgl の順でフォールバック取得
+    const contextOptions = {
       alpha: true,
       premultipliedAlpha: false,
       antialias: false,
-    });
+    };
+    const gl =
+      this.canvas.getContext('webgl2', contextOptions) ||
+      this.canvas.getContext('webgl', contextOptions) ||
+      this.canvas.getContext('experimental-webgl', contextOptions);
 
     if (!gl) {
       console.error('WebGL not supported');
@@ -290,16 +302,124 @@ class FireRenderer {
     return shader;
   }
 
+  // Canvas 2D フォールバック初期化
+  initCanvas2D() {
+    this.useCanvas2D = true;
+    this.ctx2d = this.canvas.getContext('2d');
+    this.initialized = true;
+    this.flameParticles = [];
+  }
+
+  // Canvas 2D フォールバック用炎パーティクルの放出
+  // pitCx/pitCy/pitRadius は TakibiApp から受け取る（全画面Canvas座標系）
+  emitFlameParticles(intensity, wind, pitCx, pitCy, pitRadius) {
+    const count = Math.floor(intensity * 3) + 1;
+    const spread = pitRadius * 0.6 * Math.min(intensity, 1.5);
+
+    for (let i = 0; i < count; i++) {
+      this.flameParticles.push({
+        x: pitCx + (Math.random() - 0.5) * spread,
+        y: pitCy - pitRadius * 0.1,
+        vx: (Math.random() - 0.5) * 1.5 + wind * 2,
+        vy: -(2.5 + Math.random() * 3.5) * (0.6 + intensity * 0.4),
+        life: 1.0,
+        decay: 0.012 + Math.random() * 0.018,
+        size: (pitRadius * 0.25 + Math.random() * pitRadius * 0.35) * (0.7 + intensity * 0.3),
+      });
+    }
+  }
+
+  // Canvas 2D フォールバック描画
+  renderCanvas2D(time, intensity, wind, pitCx, pitCy, pitRadius) {
+    const ctx = this.ctx2d;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+
+    ctx.clearRect(0, 0, W, H);
+
+    if (intensity <= 0.01) return;
+
+    // パーティクル放出（座標は引数から受け取る）
+    this.emitFlameParticles(intensity, wind, pitCx, pitCy, pitRadius);
+
+    // パーティクル更新・描画
+    this.flameParticles = this.flameParticles.filter(p => p.life > 0);
+
+    for (const p of this.flameParticles) {
+      // 乱流でゆらぎ
+      p.vx += (Math.random() - 0.5) * 0.4;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= p.decay;
+
+      if (p.life <= 0) continue;
+
+      const alpha = Math.pow(p.life, 1.5);
+      const size = p.size * p.life;
+
+      // ライフに応じて白→黄→オレンジ→赤→暗
+      const lifeRatio = p.life;
+      let r, g, b;
+      if (lifeRatio > 0.7) {
+        // 白〜黄色
+        const t = (lifeRatio - 0.7) / 0.3;
+        r = 255;
+        g = Math.floor(255 * (0.7 + t * 0.3));
+        b = Math.floor(200 * (1 - t));
+      } else if (lifeRatio > 0.4) {
+        // 黄〜オレンジ
+        const t = (lifeRatio - 0.4) / 0.3;
+        r = 255;
+        g = Math.floor(255 * t * 0.7);
+        b = 0;
+      } else {
+        // オレンジ〜赤
+        const t = lifeRatio / 0.4;
+        r = Math.floor(200 + 55 * t);
+        g = Math.floor(60 * t);
+        b = 0;
+      }
+
+      const gradient = ctx.createRadialGradient(
+        p.x, p.y, 0,
+        p.x, p.y, size
+      );
+      gradient.addColorStop(0, `rgba(${r},${g},${b},${alpha})`);
+      gradient.addColorStop(0.4, `rgba(${r},${Math.floor(g * 0.5)},0,${alpha * 0.6})`);
+      gradient.addColorStop(1, `rgba(${Math.floor(r * 0.5)},0,0,0)`);
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+    }
+
+    // 上限を設けてメモリリーク防止
+    if (this.flameParticles.length > 300) {
+      this.flameParticles.splice(0, this.flameParticles.length - 300);
+    }
+  }
+
   resize(width, height) {
     this.canvas.width = width;
     this.canvas.height = height;
     if (this.gl) {
       this.gl.viewport(0, 0, width, height);
     }
+    // Canvas 2D フォールバックの場合はパーティクルをリセット
+    if (this.useCanvas2D) {
+      this.flameParticles = [];
+    }
   }
 
-  render(time, intensity, wind) {
+  render(time, intensity, wind, pitCx, pitCy, pitRadius) {
     if (!this.initialized) return;
+
+    // Canvas 2D フォールバックモード
+    if (this.useCanvas2D) {
+      this.renderCanvas2D(time, intensity, wind, pitCx, pitCy, pitRadius);
+      return;
+    }
 
     const gl = this.gl;
     gl.clearColor(0, 0, 0, 0);
@@ -725,10 +845,10 @@ class TakibiApp {
   }
 
   init() {
-    // WebGL初期化
+    // WebGL初期化を試みる。失敗したらCanvas 2Dフォールバックで継続
     if (!this.fireRenderer.init()) {
-      this.showFallback();
-      return;
+      // Canvas 2D フォールバックで炎描画を継続
+      this.fireRenderer.initCanvas2D();
     }
 
     // 薪を初期配置
@@ -770,10 +890,18 @@ class TakibiApp {
     const fireX = this.pitCx - fireW / 2;
     const fireY = this.pitCy - fireH * 0.85;
 
-    this.fireCanvas.style.width = `${fireW}px`;
-    this.fireCanvas.style.height = `${fireH}px`;
-    this.fireCanvas.style.left = `${fireX}px`;
-    this.fireCanvas.style.top = `${fireY}px`;
+    // Canvas 2D フォールバックの場合は全画面で描画（座標はアプリ側で管理）
+    if (this.fireRenderer.useCanvas2D) {
+      this.fireCanvas.style.width = `${W}px`;
+      this.fireCanvas.style.height = `${H}px`;
+      this.fireCanvas.style.left = '0px';
+      this.fireCanvas.style.top = '0px';
+    } else {
+      this.fireCanvas.style.width = `${fireW}px`;
+      this.fireCanvas.style.height = `${fireH}px`;
+      this.fireCanvas.style.left = `${fireX}px`;
+      this.fireCanvas.style.top = `${fireY}px`;
+    }
 
     // 薪の再配置（炉の外側）
     this.repositionLogs();
@@ -1253,9 +1381,17 @@ class TakibiApp {
     this.drawBackground();
     this.drawUI();
 
-    // WebGL炎レンダリング（着火後のみ）
+    // 炎レンダリング（着火後のみ）
+    // Canvas 2D フォールバックの場合は pitCx/pitCy/pitRadius を渡す
     if (state.isLit && state.intensity > 0.01) {
-      this.fireRenderer.render(elapsed, state.intensity, state.wind);
+      this.fireRenderer.render(
+        elapsed, state.intensity, state.wind,
+        this.pitCx, this.pitCy, this.pitRadius
+      );
+    } else if (this.fireRenderer.useCanvas2D) {
+      // Canvas 2D フォールバックは未着火時もcanvasをクリア
+      const ctx2d = this.fireRenderer.ctx2d;
+      if (ctx2d) ctx2d.clearRect(0, 0, this.fireCanvas.width, this.fireCanvas.height);
     }
 
     state.animFrameId = requestAnimationFrame(() => this.animate());
