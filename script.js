@@ -88,51 +88,91 @@ class FireRenderer {
         return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
       }
 
-      // ---- FBM（6オクターブ）----
+      // ---- FBM（8オクターブ）----
       float fbm(vec2 p) {
         float value = 0.0;
         float amplitude = 0.5;
         float frequency = 1.0;
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 8; i++) {
           value     += amplitude * noise(p * frequency);
-          frequency *= 2.1;
+          frequency *= 2.07;
           amplitude *= 0.5;
         }
         return value;
       }
 
-      // ---- 炎の形状 ----
+      // ---- 複数の「炎の舌」による形状マスク ----
       float flameShape(vec2 uv, float intensity) {
-        float x = (uv.x - 0.5) * 2.0;
+        float x = uv.x - 0.5;
         float y = uv.y;
-        float flameHeight = 0.55 + intensity * 0.35;
         float t = u_time;
+        float flameHeight = 0.52 + intensity * 0.38;
 
-        float sway = fbm(vec2(y * 1.5, t * 0.4)) * 0.3 * (1.0 - y * 0.5);
-        float windOffset = u_wind * 0.15 * (1.0 - y);
-        float xOff = x - sway - windOffset;
+        // 風によるオフセット（根元では弱く、先端では強い）
+        float windDrift = u_wind * 0.18 * y;
 
-        float width = (1.0 - y / flameHeight) * 0.48 + 0.05;
-        width *= (0.85 + intensity * 0.15);
+        float mask = 0.0;
 
-        float mask = 1.0 - smoothstep(0.0, width, abs(xOff));
-        mask *= 1.0 - smoothstep(0.0, flameHeight, y);
+        // 3本の炎の舌を重ね合わせる
+        // 各舌は独立した揺らぎを持ち、左右非対称になる
+        for (int i = 0; i < 3; i++) {
+          float fi = float(i);
+          float offset = fi * 0.37;
 
-        float base = 1.0 - smoothstep(0.0, 0.25, y);
-        mask = max(mask, base * 0.5 * (1.0 - abs(x) * 1.5));
+          // 非線形スクロール：炎が上昇する視覚
+          float scrollT = t * 0.55 + offset;
+          float scrollY = y - scrollT * 0.35;
+
+          // 各舌の横揺れ（時間・高さで変化。舌ごとに位相ずれ）
+          float xSway = fbm(vec2(scrollY * 1.8 + offset * 3.1, t * 0.38 + offset))
+                        * 0.22 - 0.11;
+          // 風の影響を加算
+          float tongueX = x - xSway - windDrift - (fi - 1.0) * 0.09;
+
+          // 舌ごとの幅：根元で広く、先端で細く尖る
+          float widthBase = 0.19 - fi * 0.03;
+          float width = (widthBase - y * (0.13 + fi * 0.01))
+                        * (0.75 + intensity * 0.25);
+          width = max(width, 0.005);
+
+          // 横方向マスク
+          float tongue = 1.0 - smoothstep(0.0, width, abs(tongueX));
+
+          // 高さ方向マスク：先端に向けて滑らかに消える
+          float topFade = 1.0 - smoothstep(0.0, flameHeight - fi * 0.06, y);
+          tongue *= topFade;
+
+          // FBMで舌の輪郭を細かく乱す（乱流感）
+          float edgeNoise = fbm(vec2(tongueX * 5.0 + offset, scrollY * 4.0)) * 0.18;
+          tongue *= 0.82 + edgeNoise;
+
+          mask = max(mask, tongue);
+        }
+
+        // 根元の広がり（地面に接する部分）
+        float base = 1.0 - smoothstep(0.0, 0.22, y);
+        mask = max(mask, base * 0.65 * (1.0 - abs(x) * 3.2));
 
         return clamp(mask, 0.0, 1.0);
       }
 
-      // ---- 温度→色（黒体放射近似）----
+      // ---- 黒体放射に基づく精密な色温度マッピング ----
+      // t=0: 暗い赤, t=0.4: 深い赤オレンジ, t=0.65: 明るいオレンジ,
+      // t=0.85: 黄, t=1.0: 白〜薄黄
       vec3 temperatureToColor(float t) {
-        vec3 col = vec3(0.0);
-        col.r = clamp(t * 2.5, 0.0, 1.0);
-        col.g = clamp(t * t * 1.8 - 0.1, 0.0, 1.0);
-        col.b = clamp((t - 0.75) * 4.0, 0.0, 1.0);
-        // pow() に 0 を渡すと一部の WebGL1 実装で undefined behavior になるため保護
-        col.r = pow(max(col.r, 0.0001), 0.8);
-        col.g = pow(max(col.g, 0.0001), 1.1);
+        // 暗い赤 → 赤オレンジ
+        vec3 col = mix(vec3(0.31, 0.0, 0.0), vec3(0.75, 0.15, 0.01), smoothstep(0.0, 0.35, t));
+        // 赤オレンジ → 明るいオレンジ
+        col = mix(col, vec3(1.0, 0.45, 0.04), smoothstep(0.35, 0.6, t));
+        // オレンジ → 黄
+        col = mix(col, vec3(1.0, 0.75, 0.15), smoothstep(0.6, 0.82, t));
+        // 黄 → 白〜薄黄（核心部）
+        col = mix(col, vec3(1.0, 0.99, 0.90), smoothstep(0.82, 1.0, t));
+
+        // ガンマ補正（炎の輝き感を強調）
+        col.r = pow(max(col.r, 0.0001), 0.75);
+        col.g = pow(max(col.g, 0.0001), 0.80);
+        col.b = pow(max(col.b, 0.0001), 0.90);
         return col;
       }
 
@@ -140,82 +180,119 @@ class FireRenderer {
       float smokeShape(vec2 uv) {
         float x = (uv.x - 0.5) * 2.0;
         float y = uv.y;
-        if (y < 0.5) return 0.0;
+        if (y < 0.48) return 0.0;
 
-        float t = u_time * 0.15;
-        float sway = fbm(vec2(y * 0.8 + t, t * 0.5)) * 0.6;
-        float xOff = x - sway * (y - 0.5);
+        float t = u_time * 0.13;
+        float sway = fbm(vec2(y * 0.9 + t, t * 0.4)) * 0.65;
+        float xOff = x - sway * (y - 0.48);
 
-        float width = 0.15 + (y - 0.5) * 0.4;
+        float width = 0.12 + (y - 0.48) * 0.45;
         float mask = 1.0 - smoothstep(0.0, width, abs(xOff));
-        mask *= smoothstep(0.5, 0.65, y);
-        mask *= 1.0 - smoothstep(0.75, 1.0, y);
+        mask *= smoothstep(0.48, 0.62, y);
+        mask *= 1.0 - smoothstep(0.72, 1.0, y);
 
-        float smokeFbm = fbm(vec2(x * 3.0 + t * 0.3, y * 2.0 - t * 0.2));
-        mask *= 0.5 + smokeFbm * 0.6;
+        float smokeFbm = fbm(vec2(x * 3.2 + t * 0.25, y * 2.2 - t * 0.18));
+        mask *= 0.45 + smokeFbm * 0.65;
 
-        return clamp(mask * 0.35, 0.0, 1.0);
+        return clamp(mask * 0.32, 0.0, 1.0);
       }
 
       void main() {
         vec2 uv = v_uv;
         float t = u_time;
         float intensity = u_intensity;
+        float flameHeight = 0.52 + intensity * 0.38;
 
-        // FBMノイズで炎の揺らぎを生成
-        vec2 noiseUV = uv * vec2(2.5, 3.0) + vec2(0.0, -t * 0.9);
-        float n1 = fbm(noiseUV + vec2(t * 0.12, 0.0));
-        float n2 = fbm(noiseUV * 1.8 + vec2(-t * 0.18, t * 0.05));
-        float n3 = fbm(noiseUV * 3.5 + vec2(t * 0.08, -t * 0.1));
-        float combinedNoise = n1 * 0.55 + n2 * 0.3 + n3 * 0.15;
+        // ---- ドメインワーピング（IQ手法）で強力な乱流を生成 ----
+        vec2 baseUV = uv * vec2(2.2, 2.8);
 
-        // 炎の形状
-        vec2 distortedUV = uv + vec2(combinedNoise * 0.12, 0.0);
+        // 第1層：基本FBM（非線形スクロール）
+        float scrollSpeed = t * 0.72;
+        vec2 q = vec2(
+          fbm(baseUV + vec2(0.0, -scrollSpeed)),
+          fbm(baseUV + vec2(5.2,  1.3) + vec2(0.0, -scrollSpeed * 0.9))
+        );
+
+        // 第2層：qでワープしたFBM（乱流感の核心）
+        vec2 r = vec2(
+          fbm(baseUV + 3.8 * q + vec2(1.7, 9.2) + vec2(0.0, -t * 0.15)),
+          fbm(baseUV + 3.8 * q + vec2(8.3, 2.8) + vec2(0.0, -t * 0.126))
+        );
+
+        // 最終ノイズ値（rでさらにワープ → 強い乱流感）
+        float warpedNoise = fbm(baseUV + 3.5 * r);
+
+        // 高周波チラつき（細かい乱れ）
+        float highFreqNoise = fbm(uv * vec2(6.0, 8.0) + vec2(t * 0.31, -t * 1.4)) * 0.5 + 0.5;
+        // 炎全体の脈動（0.95〜1.05でゆっくり明滅）
+        float pulse = 1.0 + sin(t * 1.8) * 0.03 + sin(t * 3.1 + 0.7) * 0.02;
+
+        // UV歪み（ドメインワーピングを炎形状にも適用）
+        vec2 distortedUV = uv + vec2(
+          warpedNoise * 0.10 + r.x * 0.04,
+          -abs(warpedNoise) * 0.03
+        );
+
+        // ---- 炎の形状（複数の舌）----
         float flame = flameShape(distortedUV, intensity);
 
-        // 温度マップ
+        // ---- 温度マップ（精密化）----
         float xDist = abs((distortedUV.x - 0.5) * 2.0);
-        float yNorm = uv.y / (0.55 + intensity * 0.35);
-        float temp = flame * (1.0 - yNorm * 0.7) * (1.0 - xDist * 0.4);
-        temp += combinedNoise * 0.15 * flame;
-        temp = clamp(temp, 0.0, 1.0);
+        float yNorm = clamp(uv.y / max(flameHeight, 0.01), 0.0, 1.0);
 
-        // 炎の色生成
+        // ベース温度：高さ・横距離で減衰
+        float temp = (1.0 - pow(max(yNorm, 0.0001), 0.65)) * (1.0 - xDist * 0.5);
+        // ドメインワーピングノイズで温度に揺らぎを加える
+        temp += (warpedNoise * 0.5 + 0.5) * 0.18 * flame;
+        temp -= highFreqNoise * 0.06 * yNorm;
+        temp = clamp(temp * flame, 0.0, 1.0);
+
+        // ---- 炎の色生成 ----
         vec3 flameColor = temperatureToColor(temp);
 
-        // 内炎（白〜黄色の核）
-        float core = (1.0 - yNorm * 1.2) * (1.0 - xDist * 2.0);
+        // ---- 核心の白〜薄黄ハイライト ----
+        // 根元中央の最高温部分が白く輝く
+        float core = (1.0 - pow(max(yNorm, 0.0001), 0.5)) * (1.0 - xDist * 2.8);
         core = clamp(core, 0.0, 1.0) * flame;
-        float coreNoise = fbm(uv * vec2(4.0, 6.0) + vec2(0.0, -t * 1.2));
-        core *= 0.6 + coreNoise * 0.5;
-        flameColor += vec3(1.0, 0.97, 0.85) * core * 0.9;
+        // コアにも高周波チラつきを乗せる
+        float coreNoise = fbm(uv * vec2(5.0, 7.0) + vec2(r.x, -t * 1.3));
+        core *= 0.55 + coreNoise * 0.55;
+        // #FFFDE7 相当（白〜薄黄）
+        flameColor += vec3(1.0, 0.992, 0.906) * core * 1.05;
 
-        // 外炎の赤み
-        float edge = flame * (1.0 - temp * 0.7);
-        flameColor += vec3(0.6, 0.05, 0.0) * edge * 0.4;
+        // ---- 外縁の暗い赤（#BF360C〜#4E0000）----
+        float edge = flame * pow(max(1.0 - temp, 0.0001), 1.8);
+        // #BF360C = (0.749, 0.212, 0.047)
+        flameColor += vec3(0.75, 0.21, 0.05) * edge * 0.55;
 
-        // ブルーム効果
-        float bloomFbm = fbm(uv * vec2(2.0, 3.0) + vec2(t * 0.05, -t * 0.6));
-        float bloom = smoothstep(0.3, 0.0, abs((uv.x - 0.5) * 2.0)) * bloomFbm;
-        bloom *= (1.0 - uv.y * 1.2);
-        bloom = clamp(bloom * intensity, 0.0, 0.5);
-        flameColor += vec3(0.8, 0.3, 0.0) * bloom * 0.3;
+        // ---- エミッション（HDRブルーム）----
+        // 明るい部分が滲んで光る（根元の照り返し）
+        float glowRadius = smoothstep(0.45, 0.0, abs(uv.x - 0.5))
+                           * (1.0 - smoothstep(0.0, 0.3, uv.y));
+        // FBMで形を崩す
+        float glowFbm = fbm(uv * vec2(1.8, 2.5) + vec2(t * 0.04, -t * 0.5));
+        float glow = glowRadius * (0.5 + glowFbm * 0.5) * intensity;
+        // オレンジ〜赤のグロー色
+        flameColor += vec3(0.9, 0.28, 0.02) * glow * 0.45;
 
-        // 煙
+        // 脈動を全体に適用
+        flameColor *= pulse;
+
+        // ---- 煙 ----
         float smoke = smokeShape(uv);
-        vec3 smokeColor = vec3(0.35, 0.32, 0.3);
+        vec3 smokeColor = vec3(0.33, 0.30, 0.28);
 
-        // 最終合成
-        float flameAlpha = clamp(length(flameColor) * 1.2, 0.0, 1.0);
-        flameAlpha = max(flameAlpha, flame * 0.4);
-        float smokeAlpha = smoke * (1.0 - flameAlpha * 0.8);
+        // ---- 最終合成 ----
+        float flameAlpha = clamp(length(flameColor) * 1.1, 0.0, 1.0);
+        flameAlpha = max(flameAlpha, flame * 0.45);
+        float smokeAlpha = smoke * (1.0 - flameAlpha * 0.85);
 
         vec3 finalColor = flameColor + smokeColor * smokeAlpha;
         float finalAlpha = clamp(flameAlpha + smokeAlpha, 0.0, 1.0);
 
-        // pow() に 0 を渡すと一部の WebGL1 実装で問題になるため保護
-        finalColor = pow(max(finalColor, vec3(0.0001)), vec3(0.85));
-        finalColor *= 1.0 + intensity * 0.2;
+        // ガンマ補正 + 輝度強化
+        finalColor = pow(max(finalColor, vec3(0.0001)), vec3(0.82));
+        finalColor *= 1.0 + intensity * 0.25;
 
         gl_FragColor = vec4(finalColor, finalAlpha);
       }
