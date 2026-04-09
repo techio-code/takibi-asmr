@@ -1,0 +1,391 @@
+/* ============================================================
+   style.css — 焚き火ASMRアプリ
+   カテゴリ: ゲーム/体験系（ダーク背景許可）
+   ============================================================ */
+
+/* リセット */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #050510;
+  font-family: 'Noto Sans JP', sans-serif;
+  color: #ffffff;
+  touch-action: none;
+  user-select: none;
+}
+
+/* ============================================================
+   Canvasレイヤー構成
+   bg-canvas  → 背景（夜空・地面の光）
+   fire-canvas → WebGL炎シェーダー（position: absolute）
+   ui-canvas  → 薪・炉・UIインタラクション（最前面）
+   ============================================================ */
+.canvas-container {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#bg-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+#fire-canvas {
+  position: absolute;
+  z-index: 2;
+  /* mix-blend-mode: screen で背景に自然に溶け込む */
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+#ui-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  cursor: default;
+}
+
+/* ============================================================
+   HUDオーバーレイ（UI）
+   ============================================================ */
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* ---- タイトル ---- */
+#title {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+#title h1 {
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: 0.18em;
+  color: rgba(255, 200, 120, 0.85);
+  text-shadow: 0 0 20px rgba(255, 120, 30, 0.6);
+}
+
+#title .subtitle {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: rgba(255, 200, 120, 0.4);
+  margin-top: 4px;
+}
+
+/* ---- 着火ボタン ---- */
+#ignite-btn {
+  position: absolute;
+  bottom: 130px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: all;
+
+  background: rgba(20, 15, 10, 0.8);
+  border: 1.5px solid rgba(255, 160, 50, 0.6);
+  color: rgba(255, 200, 100, 0.9);
+  padding: 12px 32px;
+  border-radius: 40px;
+  font-size: 15px;
+  font-family: 'Noto Sans JP', sans-serif;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 0.3s ease;
+  min-width: 160px;
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+#ignite-btn:hover {
+  background: rgba(200, 80, 20, 0.5);
+  border-color: rgba(255, 180, 80, 0.9);
+  box-shadow: 0 0 20px rgba(255, 100, 20, 0.4);
+  transform: translateX(-50%) translateY(-2px);
+}
+
+#ignite-btn.burning {
+  background: rgba(180, 60, 10, 0.6);
+  border-color: rgba(255, 140, 40, 0.8);
+  color: rgba(255, 220, 120, 1.0);
+  box-shadow: 0 0 30px rgba(255, 100, 20, 0.5);
+  animation: burnPulse 2.5s ease-in-out infinite;
+}
+
+@keyframes burnPulse {
+  0%, 100% { box-shadow: 0 0 20px rgba(255, 100, 20, 0.4); }
+  50% { box-shadow: 0 0 40px rgba(255, 150, 50, 0.7); }
+}
+
+/* ---- 薪の状態インジケーター ---- */
+#log-indicator {
+  position: absolute;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  text-align: center;
+}
+
+#log-count {
+  font-size: 12px;
+  color: rgba(255, 180, 80, 0.5);
+  letter-spacing: 0.1em;
+}
+
+/* ---- 操作ヒント ---- */
+#hints {
+  position: absolute;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hint-item {
+  font-size: 11px;
+  color: rgba(255, 200, 120, 0.35);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+/* ---- 音量コントロール ---- */
+#audio-controls {
+  position: absolute;
+  top: 24px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: all;
+}
+
+#mute-btn {
+  background: rgba(20, 15, 10, 0.7);
+  border: 1px solid rgba(255, 160, 50, 0.3);
+  color: rgba(255, 200, 100, 0.8);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(8px);
+}
+
+#mute-btn:hover {
+  background: rgba(200, 80, 20, 0.4);
+  border-color: rgba(255, 180, 80, 0.6);
+}
+
+#volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 160, 50, 0.3);
+  outline: none;
+  cursor: pointer;
+}
+
+#volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255, 180, 80, 0.9);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+#volume-slider::-webkit-slider-thumb:hover {
+  background: rgba(255, 220, 120, 1.0);
+}
+
+/* ---- noteリンク（フッター） ---- */
+#note-link {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  pointer-events: all;
+  font-size: 10px;
+  color: rgba(255, 200, 120, 0.3);
+  text-decoration: none;
+  letter-spacing: 0.06em;
+  transition: color 0.2s;
+}
+
+#note-link:hover {
+  color: rgba(255, 200, 120, 0.7);
+}
+
+/* ---- WebGLフォールバック ---- */
+#webgl-fallback {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #050510;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  z-index: 100;
+  text-align: center;
+  padding: 32px;
+}
+
+#webgl-fallback .fallback-icon {
+  font-size: 64px;
+}
+
+#webgl-fallback p {
+  font-size: 16px;
+  color: rgba(255, 200, 120, 0.7);
+  line-height: 1.8;
+}
+
+/* ============================================================
+   着火演出オーバーレイ
+   ============================================================ */
+#ignite-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  background: radial-gradient(ellipse at 50% 70%, rgba(255, 80, 20, 0.3) 0%, transparent 70%);
+}
+
+#ignite-overlay.active {
+  opacity: 1;
+  animation: igniteFlash 1.5s ease-out forwards;
+}
+
+@keyframes igniteFlash {
+  0% { opacity: 0; }
+  20% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ============================================================
+   モバイル対応
+   ============================================================ */
+@media (max-width: 480px) {
+  #title h1 {
+    font-size: 18px;
+  }
+
+  #ignite-btn {
+    bottom: 110px;
+    font-size: 14px;
+    padding: 10px 24px;
+  }
+
+  #hints {
+    bottom: 24px;
+  }
+
+  .hint-item {
+    font-size: 10px;
+  }
+
+  #audio-controls {
+    top: 16px;
+    right: 12px;
+  }
+
+  #volume-slider {
+    width: 60px;
+  }
+}
+
+@media (max-width: 360px) {
+  #volume-slider {
+    display: none;
+  }
+}
+
+/* ============================================================
+   高さが低い端末（横向きスマホ等）
+   ============================================================ */
+@media (max-height: 500px) {
+  #title {
+    top: 8px;
+  }
+
+  #title h1 {
+    font-size: 16px;
+  }
+
+  #ignite-btn {
+    bottom: 80px;
+  }
+
+  #hints {
+    bottom: 8px;
+  }
+}
+
+/* ============================================================
+   ローディング画面
+   ============================================================ */
+#loading-screen {
+  position: fixed;
+  inset: 0;
+  background: #050510;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 20px;
+  z-index: 200;
+  transition: opacity 0.8s ease;
+}
+
+#loading-screen.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-icon {
+  font-size: 48px;
+  animation: flicker 1.2s ease-in-out infinite;
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.95); }
+}
+
+.loading-text {
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  color: rgba(255, 200, 120, 0.5);
+}

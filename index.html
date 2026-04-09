@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="現実と見間違えるほどリアルな焚き火インタラクションアプリ。薪を割って、炉にくべて、ASMR音とともに揺れる炎を楽しむ体験。WebGLシェーダーで実装。" />
+  <meta name="theme-color" content="#050510" />
+
+  <!-- OGP -->
+  <meta property="og:title" content="焚き火ASMR — リアル炎インタラクション" />
+  <meta property="og:description" content="薪を割り、火を付け、炎が揺れる。WebGLシェーダーで作ったリアルな焚き火体験アプリ。ASMR音付き。" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://techio-code.github.io/takibi-asmr/" />
+  <meta property="og:image" content="https://techio-code.github.io/takibi-asmr/ogp.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:site" content="@techio_code" />
+  <meta name="twitter:title" content="焚き火ASMR — リアル炎インタラクション" />
+  <meta name="twitter:description" content="WebGLシェーダーで作ったリアルな焚き火体験。薪を割って炉にくべると炎が大きくなる。" />
+  <meta name="twitter:image" content="https://techio-code.github.io/takibi-asmr/ogp.png" />
+
+  <title>焚き火ASMR — リアル炎インタラクション</title>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ローディング画面 -->
+<div id="loading-screen">
+  <div class="loading-icon">🔥</div>
+  <div class="loading-text">焚き火を準備しています...</div>
+</div>
+
+<!-- WebGLフォールバック -->
+<div id="webgl-fallback">
+  <div class="fallback-icon">🪵</div>
+  <p>
+    お使いのブラウザではWebGLが<br>
+    サポートされていません。<br><br>
+    Chrome / Safari の最新版でご覧ください。
+  </p>
+</div>
+
+<!-- メインCanvasコンテナ -->
+<div class="canvas-container">
+  <!-- レイヤー1: 夜空・背景 -->
+  <canvas id="bg-canvas"></canvas>
+
+  <!-- レイヤー2: WebGL炎シェーダー -->
+  <canvas id="fire-canvas"></canvas>
+
+  <!-- レイヤー3: 薪・炉・インタラクション -->
+  <canvas id="ui-canvas"></canvas>
+</div>
+
+<!-- 着火フラッシュオーバーレイ -->
+<div id="ignite-overlay"></div>
+
+<!-- HUD（UIオーバーレイ） -->
+<div id="hud">
+
+  <!-- タイトル -->
+  <div id="title">
+    <h1>焚き火 ASMR</h1>
+    <div class="subtitle">たき火を育ててみよう</div>
+  </div>
+
+  <!-- 音量コントロール -->
+  <div id="audio-controls">
+    <button id="mute-btn" aria-label="ミュート切り替え">🔊</button>
+    <input
+      type="range"
+      id="volume-slider"
+      min="0"
+      max="100"
+      value="70"
+      aria-label="音量"
+    />
+  </div>
+
+  <!-- 薪の数インジケーター -->
+  <div id="log-indicator">
+    <span id="log-count">薪 0/5</span>
+  </div>
+
+  <!-- 着火ボタン -->
+  <button id="ignite-btn" aria-label="マッチで着火する">
+    🔥 マッチで着火
+  </button>
+
+  <!-- 操作ヒント -->
+  <div id="hints">
+    <div class="hint-item">薪をクリック → 割る</div>
+    <div class="hint-item">薪をドラッグ → 炉にくべる</div>
+  </div>
+
+  <!-- noteリンク -->
+  <a
+    id="note-link"
+    href="https://note.com/techio_note"
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label="てちおのnoteを見る"
+  >by @techio_code</a>
+
+</div><!-- /#hud -->
+
+<script src="audio.js"></script>
+<script src="script.js"></script>
+
+<script>
+  // ローディング画面を非表示にする
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      const loading = document.getElementById('loading-screen');
+      loading.classList.add('hidden');
+      setTimeout(() => loading.remove(), 900);
+    }, 600);
+  });
+</script>
+
+</body>
+</html>
