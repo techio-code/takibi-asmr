@@ -808,22 +808,27 @@ class ParticleSystem {
     this.particles = [];
   }
 
-  emit(x, y, type, count = 1) {
+  emit(x, y, type, count = 1, options = {}) {
     for (let i = 0; i < count; i++) {
+      // 起動時パーティクルは速度・サイズを強化
+      const isLaunch = options.launch === true;
+      const speedScale = isLaunch ? 2.5 : 1.0;
+
       const particle = {
         x, y,
         type,  // 'ember' | 'smoke' | 'spark'
-        vx: (Math.random() - 0.5) * (type === 'ember' ? 1.5 : 0.5),
-        vy: -(0.5 + Math.random() * 2.0),
+        vx: (Math.random() - 0.5) * (type === 'ember' ? 1.5 : 0.5) * speedScale,
+        vy: -(0.5 + Math.random() * 2.0) * speedScale,
         life: 1.0,
         decay: type === 'ember' ? 0.008 + Math.random() * 0.015
              : type === 'smoke' ? 0.004 + Math.random() * 0.008
              : 0.02 + Math.random() * 0.03,
-        size: type === 'ember' ? 1.5 + Math.random() * 2.5
-            : type === 'smoke' ? 8 + Math.random() * 20
-            : 1 + Math.random() * 1.5,
+        size: (type === 'ember' ? 1.5 + Math.random() * 2.5
+             : type === 'smoke' ? 8 + Math.random() * 20
+             : 1 + Math.random() * 1.5) * (isLaunch ? 1.6 : 1.0),
         rotation: Math.random() * Math.PI * 2,
         rotSpeed: (Math.random() - 0.5) * 0.05,
+        isLaunch,
       };
       this.particles.push(particle);
     }
@@ -938,11 +943,80 @@ class TakibiApp {
     // イベントハンドラー設定
     this.setupEvents();
 
+    // 起動時パーティクルをアニメーションループ内で発火させるためのフラグ
+    // （pitRadius が確定してから emit するため）
+    this._launchParticlesPending = true;
+
     // アニメーションループ開始
     this.animate();
 
     // 初期UIの設定
     this.updateUI();
+  }
+
+  // ============================================================
+  // 起動時ウェルカムパーティクル（炉から赤〜オレンジが上昇）
+  // ============================================================
+  _emitLaunchParticles() {
+    const cx = this.pitCx;
+    const cy = this.pitCy;
+    const r  = this.pitRadius;
+
+    const launchOpt = { launch: true };
+
+    // 最初の爆発的放出（ember 30個 + spark 15個）
+    for (let i = 0; i < 30; i++) {
+      this.particles.emit(
+        cx + (Math.random() - 0.5) * r * 0.8,
+        cy - r * 0.1,
+        'ember', 1, launchOpt
+      );
+    }
+    for (let i = 0; i < 15; i++) {
+      this.particles.emit(
+        cx + (Math.random() - 0.5) * r * 0.6,
+        cy - r * 0.2,
+        'spark', 1, launchOpt
+      );
+    }
+
+    // 0.3秒後に第2波
+    setTimeout(() => {
+      if (this.pitRadius === 0) return;
+      for (let i = 0; i < 20; i++) {
+        this.particles.emit(
+          cx + (Math.random() - 0.5) * r * 0.7,
+          cy - r * 0.15,
+          'ember', 1, launchOpt
+        );
+      }
+      for (let i = 0; i < 8; i++) {
+        this.particles.emit(
+          cx + (Math.random() - 0.5) * r * 0.4,
+          cy - r * 0.3,
+          'spark', 1, launchOpt
+        );
+      }
+    }, 300);
+
+    // 0.6秒後に第3波（煙も加える）
+    setTimeout(() => {
+      if (this.pitRadius === 0) return;
+      for (let i = 0; i < 10; i++) {
+        this.particles.emit(
+          cx + (Math.random() - 0.5) * r * 0.5,
+          cy - r * 0.2,
+          'ember', 1, launchOpt
+        );
+      }
+      for (let i = 0; i < 4; i++) {
+        this.particles.emit(
+          cx + (Math.random() - 0.5) * r * 0.3,
+          cy - r * 0.4,
+          'smoke', 1, launchOpt
+        );
+      }
+    }, 600);
   }
 
   resize() {
@@ -1447,6 +1521,25 @@ class TakibiApp {
           'spark', 2
         );
       }
+    }
+
+    // 未着火でも微弱なくすぶりエフェクト（薪が炉にある場合）
+    if (!state.isLit && state.logsInFire > 0) {
+      const cx = this.pitCx;
+      const cy = this.pitCy;
+      if (Math.random() < 0.04) {
+        this.particles.emit(
+          cx + (Math.random() - 0.5) * this.pitRadius * 0.6,
+          cy - this.pitRadius * 0.15,
+          'smoke', 1
+        );
+      }
+    }
+
+    // 起動時パーティクル（炉の位置が確定してから自動的に発火）
+    if (this._launchParticlesPending && this.pitRadius > 0) {
+      this._launchParticlesPending = false;
+      this._emitLaunchParticles();
     }
 
     // 音量を炎の強度に合わせて調整
